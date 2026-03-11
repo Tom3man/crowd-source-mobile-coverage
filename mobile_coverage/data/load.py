@@ -8,10 +8,26 @@ import pandas as pd
 from datasets import load_dataset
 from dateutil import rrule
 
-from mobile_coverage import config
-from mobile_coverage.logging import configure_logger
+from mobile_coverage.common import config
+from mobile_coverage.common.logging import configure_logger
 
 log = configure_logger("cell_coverage.build_data")
+
+
+def get_cell_details() -> pd.DataFrame:
+    """
+    Load cell antenna parameter data (tower location, azimuth, beamwidth, radii).
+
+    Returns:
+        pd.DataFrame with columns:
+            anon_cell_key, cell_latitude, cell_longitude,
+            azimuth, horizontal_beam, radii_70, radii_80, radii_90
+    """
+    ds = load_dataset(
+        config.CELL_DETAILS_DATA_PATH,
+        data_files={"train": config.CELL_DETAILS_FILE},
+    )
+    return ds["train"].to_pandas()
 
 
 def _coerce_date(value: datetime | str | None, fallback: datetime) -> datetime:
@@ -36,7 +52,7 @@ def get_data(
     ]
 
     ds = load_dataset(
-        "joefee/cell-service-data",
+        config.HUGGING_FACE_DATA_PATH,
         data_files={
             "train": config.DATA_FILES,
         },

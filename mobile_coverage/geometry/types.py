@@ -14,3 +14,4 @@ def sanitise_numpy_scalars(values: dict[str, object]) -> dict[str, object]:
         else:
             clean_values[key] = value
     return clean_values
+

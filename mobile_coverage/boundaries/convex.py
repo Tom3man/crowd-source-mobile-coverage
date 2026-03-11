@@ -2,7 +2,7 @@ import pandas as pd
 from shapely.geometry import MultiPoint, Point
 from shapely.geometry.base import BaseGeometry
 
-from mobile_coverage.logging import configure_logger
+from mobile_coverage.common.logging import configure_logger
 
 log = configure_logger("cell_coverage.boundaries.convex")
 

@@ -5,8 +5,14 @@ from mobile_coverage.boundaries.isolation_forest import (
     generate_isolation_forest_boundary_geom,
 )
 from mobile_coverage.boundaries.kde import generate_kde_boundary_geom
+from mobile_coverage.boundaries.sector import (
+    generate_sector_polygon_from_row,
+    generate_sector_polygon_geom,
+)
 from mobile_coverage.boundaries.svm import generate_svm_boundary_geom
 
+# Data-driven methods: each takes (df, **kwargs) where df contains
+# crowd-sourced longitude/latitude measurements for a single cell.
 BOUNDARY_GENERATORS = {
     "cluster": generate_cluster_hull_geom,
     "convex_hull": generate_convex_hull_geom,
@@ -23,5 +29,7 @@ __all__ = [
     "generate_gmm_boundary_geom",
     "generate_isolation_forest_boundary_geom",
     "generate_kde_boundary_geom",
+    "generate_sector_polygon_from_row",
+    "generate_sector_polygon_geom",
     "generate_svm_boundary_geom",
 ]

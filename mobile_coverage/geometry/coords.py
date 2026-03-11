@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from mobile_coverage.logging import configure_logger
+from mobile_coverage.common.logging import configure_logger
 
 log = configure_logger("cell_coverage.geometry.coords")
 

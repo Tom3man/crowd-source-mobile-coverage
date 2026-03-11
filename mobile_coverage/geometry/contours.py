@@ -8,7 +8,7 @@ from shapely.geometry import LineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize, unary_union
 
-from mobile_coverage.logging import configure_logger
+from mobile_coverage.common.logging import configure_logger
 
 log = configure_logger("cell_coverage.geometry.contours")
 

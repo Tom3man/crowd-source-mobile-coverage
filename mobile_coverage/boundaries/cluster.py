@@ -10,7 +10,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from mobile_coverage.geometry import prepare_coords
-from mobile_coverage.logging import configure_logger
+from mobile_coverage.common.logging import configure_logger
 
 log = configure_logger("cell_coverage.boundaries.cluster")
 

@@ -6,6 +6,9 @@ from pathlib import Path
 from mobile_coverage import DATA_PATH
 
 # Data loading windows and filtering
+HUGGING_FACE_DATA_PATH = "joefee/cell-service-data"
+CELL_DETAILS_DATA_PATH = "TomFreeman3/cell_service_data"
+CELL_DETAILS_FILE = "cell_details_raw.csv"
 DEFAULT_START_DATE = datetime(2025, 3, 1)
 DEFAULT_END_DATE = datetime(2025, 6, 30)
 MIN_POINTS_REQUIRED = 30

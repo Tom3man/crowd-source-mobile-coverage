@@ -11,10 +11,10 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from mobile_coverage import config
+from mobile_coverage.common import config
 from mobile_coverage.boundaries.convex import generate_convex_hull_geom
 from mobile_coverage.data.load import get_data
-from mobile_coverage.logging import configure_logger
+from mobile_coverage.common.logging import configure_logger
 
 log = configure_logger("cell_coverage.build_cell_hulls")
 
