@@ -16,11 +16,12 @@ log = configure_logger("cell_coverage.build_data")
 
 def get_cell_details() -> pd.DataFrame:
     """
-    Load cell antenna parameter data (tower location, azimuth, beamwidth, radii).
+    Load cell antenna parameter data (tower location, azimuth,
+    beamwidth, radii).
 
     Returns:
         pd.DataFrame with columns:
-            anon_cell_key, cell_latitude, cell_longitude,
+            unique_cell, cell_latitude, cell_longitude,
             azimuth, horizontal_beam, radii_70, radii_80, radii_90
     """
     ds = load_dataset(
@@ -33,7 +34,10 @@ def get_cell_details() -> pd.DataFrame:
 def _coerce_date(value: datetime | str | None, fallback: datetime) -> datetime:
     if value is None:
         return fallback
-    return value if isinstance(value, datetime) else datetime.fromisoformat(value)
+    return (
+        value if isinstance(value, datetime)
+        else datetime.fromisoformat(value)
+    )
 
 
 def get_data(
@@ -79,11 +83,12 @@ def get_data(
     WITH monthly_count AS (
         SELECT
             unique_cell,
-            date_trunc('month', CAST(timestamp AS timestamp)) as month,
+            date_trunc('month', timestamp::TIMESTAMPTZ) as month,
             COUNT(*) as count
         FROM df
         WHERE signal_level IS NOT NULL
-        GROUP BY unique_cell, month HAVING COUNT(*) >= {config.MIN_POINTS_REQUIRED}
+        GROUP BY unique_cell, month
+        HAVING COUNT(*) >= {config.MIN_POINTS_REQUIRED}
     )
     SELECT unique_cell
     FROM monthly_count
@@ -92,7 +97,8 @@ def get_data(
     """).to_df()['unique_cell'].tolist()
 
     sufficient_data_cells = [
-        cell for cell in sufficient_data_cells if cell not in config.OUTLIER_CELLS
+        cell for cell in sufficient_data_cells
+        if cell not in config.OUTLIER_CELLS
     ]
 
     df = df[df['unique_cell'].isin(sufficient_data_cells)]
@@ -104,6 +110,11 @@ def get_data(
         f"Total number of cells: {df['unique_cell'].nunique()}"
     )
 
-    df['month'] = pd.to_datetime(df['timestamp']).dt.to_period('M')
+    df = df.copy()
+    df['month'] = (
+        pd.to_datetime(df['timestamp'])
+        .dt.tz_convert(None)
+        .dt.to_period('M')
+    )
 
     return df

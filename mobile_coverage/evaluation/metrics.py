@@ -113,22 +113,26 @@ def spatial_point_metrics(
     truth_shape: str = "hull",
     truth_buffer_m: float = 0.0,
     neg_ratio: float = 1.0,
-    rng: int = 42
+    rng: int = 42,
+    truth_geom=None,
 ):
     """
     Unified evaluator: returns point- and area-based metrics + hybrid.
     - poly_pred_wgs84: shapely Polygon/MultiPolygon in EPSG:4326
     - df_test: your filtered test window (inside AOI), ALL cells for that month
     - cell_id: the cell we're evaluating
-    - target_levels: which signal categories count as 'positive'
+    - truth_geom: optional pre-built ground-truth polygon in EPSG:4326; when
+      provided, truth_shape and truth_buffer_m are ignored for area metrics
     """
     # ---------- AREA METRICS ----------
-    df_true_pts = df_test[(df_test["unique_cell"] == cell_id)]
-
-    truth_poly_gs = _truth_polygon_from_points(
-        df_true_pts, work_crs=work_crs,
-        method=truth_shape, buffer_m=truth_buffer_m
-    )
+    if truth_geom is not None:
+        truth_poly_gs = gpd.GeoSeries([truth_geom], crs=4326).to_crs(work_crs)
+    else:
+        df_true_pts = df_test[(df_test["unique_cell"] == cell_id)]
+        truth_poly_gs = _truth_polygon_from_points(
+            df_true_pts, work_crs=work_crs,
+            method=truth_shape, buffer_m=truth_buffer_m
+        )
     area_metrics = _area_overlap_metrics(
         poly_pred_wgs84, truth_poly_gs, work_crs=work_crs)
 

@@ -6,23 +6,18 @@ from pathlib import Path
 from mobile_coverage import DATA_PATH
 
 # Data loading windows and filtering
-HUGGING_FACE_DATA_PATH = "joefee/cell-service-data"
+HUGGING_FACE_DATA_PATH = "TomFreeman3/cell_service_data"
 CELL_DETAILS_DATA_PATH = "TomFreeman3/cell_service_data"
-CELL_DETAILS_FILE = "cell_details_raw.csv"
-DEFAULT_START_DATE = datetime(2025, 3, 1)
-DEFAULT_END_DATE = datetime(2025, 6, 30)
+CELL_DETAILS_FILE = "cell_tower_info.parquet"
+DEFAULT_START_DATE = datetime(2025, 11, 1)
+DEFAULT_END_DATE = datetime(2026, 2, 28)
 MIN_POINTS_REQUIRED = 30
-OUTLIER_CELLS = {"4dc7c9ec434ed06502767136789763ec11d2c4b7"}
+OUTLIER_CELLS: set[str] = set()
 DATA_FILES = [
-    "np_extract_part_1.csv",
-    # "np_extract_part_2.csv",
-    "np_extract_part_3.csv",
-    "np_extract_part_4.csv",
-    "np_extract_part_5.csv",
-    "np_extract_part_6.csv",
-    "np_extract_part_7.csv",
-    "np_extract_part_8.csv",
-    # "np_extract_part_9.csv",
+    "2025_11.parquet",
+    "2025_12.parquet",
+    "2026_01.parquet",
+    "2026_02.parquet",
 ]
 
 # Pipeline outputs

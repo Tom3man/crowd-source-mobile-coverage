@@ -18,7 +18,8 @@ from shapely.geometry.base import BaseGeometry
 
 from mobile_coverage.common import config
 from mobile_coverage.boundaries import BOUNDARY_GENERATORS
-from mobile_coverage.data.load import get_data
+from mobile_coverage.boundaries.sector import generate_sector_polygon_from_row
+from mobile_coverage.data.load import get_cell_details, get_data
 from mobile_coverage.evaluation.metrics import spatial_point_metrics
 from mobile_coverage.geometry import sanitise_numpy_scalars
 from mobile_coverage.common.logging import configure_logger
@@ -89,7 +90,7 @@ def setup_mlflow(experiment_name: str = "cell_hull_bin_eval") -> None:
     """
     Ensure MLflow logs locally under ./mlruns and point to the desired experiment.
     """
-    tracking_dir = Path(__file__).resolve().parent / "mlruns"
+    tracking_dir = Path(__file__).resolve().parents[2] / "mlruns"
     tracking_dir.mkdir(exist_ok=True)
     mlflow.set_tracking_uri(f"file://{tracking_dir}")
     mlflow.set_experiment(experiment_name)
@@ -132,9 +133,13 @@ def build_and_evaluate_models(
     cell_id: str,
     df: pd.DataFrame,
     model_specs: Sequence[ModelSpec],
+    cell_details_row: pd.Series | None = None,
 ) -> dict[str, dict[str, object]]:
     """
     Train/test each model spec on all but the most recent month of data.
+
+    Ground truth is the sector polygon derived from antenna parameters.
+    If no cell_details_row is available, evaluation falls back to alpha shape.
     """
     df_cell = df[df['unique_cell'] == cell_id]
     present_months = sorted(df_cell['month'].unique())
@@ -149,12 +154,41 @@ def build_and_evaluate_models(
     df_train = df_cell[df_cell['month'].isin(present_months[:-1])]
     df_test = df_cell[df_cell['month'] == present_months[-1]]
 
+    # --- build ground truth: sector polygon from antenna parameters ---
+    sector_geom = None
+    if cell_details_row is not None:
+        sector_geom = generate_sector_polygon_from_row(cell_details_row)
+        if sector_geom is None:
+            log.warning("sector polygon could not be built for cell %s — falling back to alpha shape", cell_id)
+
+    eval_kwargs = dict(
+        work_crs=27700,
+        neg_ratio=1.0,
+        truth_geom=sector_geom,          # None → falls back to alpha shape
+        truth_shape="alpha",             # only used when truth_geom is None
+        truth_buffer_m=0.0,
+    )
+
     best_models = {}
+
+    # --- sector polygon as baseline (evaluated against itself as ground truth) ---
+    if sector_geom is not None:
+        sector_metrics = spatial_point_metrics(
+            sector_geom, df_test, cell_id, **eval_kwargs
+        )
+        best_models["sector"] = {
+            "geometry": sector_geom,
+            "metrics": sector_metrics,
+            "params": {"radius_col": "radii_90"},
+        }
+        log.info("sector hybrid_f1 %.4f", sector_metrics["hybrid_f1"])
+
+    # --- data-driven methods ---
     for name, generator, param_grid in model_specs:
         log.info("Evaluating %s with %d parameter sets", name, len(param_grid))
 
         best_geom = None
-        best_metrics = {"point_f1": -1.0}
+        best_metrics = {"hybrid_f1": -1.0}
         best_params = None
 
         for params in param_grid:
@@ -166,21 +200,15 @@ def build_and_evaluate_models(
                 continue
 
             metrics = spatial_point_metrics(
-                geom,
-                df_test,
-                cell_id,
-                work_crs=27700,
-                truth_shape="hull",
-                truth_buffer_m=0.0,
-                neg_ratio=1.0,
+                geom, df_test, cell_id, **eval_kwargs
             )
             log.debug("%s metrics for %s: %s", name, params, metrics)
 
-            if metrics["point_f1"] > best_metrics["point_f1"]:
+            if metrics["hybrid_f1"] > best_metrics["hybrid_f1"]:
                 log.info(
-                    "%s achieved new best point_f1 %.4f with params %s",
+                    "%s achieved new best hybrid_f1 %.4f with params %s",
                     name,
-                    metrics["point_f1"],
+                    metrics["hybrid_f1"],
                     params,
                 )
                 best_geom = geom
@@ -191,9 +219,9 @@ def build_and_evaluate_models(
             log.error("%s produced no viable geometry", name)
         else:
             log.info(
-                "%s best point_f1 %.4f with params %s",
+                "%s best hybrid_f1 %.4f with params %s",
                 name,
-                best_metrics["point_f1"],
+                best_metrics["hybrid_f1"],
                 best_params,
             )
 
@@ -282,16 +310,23 @@ def _build_model_rows(
     return model_rows
 
 
-def main():
+def main(max_cells: int | None = None):
     """
     Run experiments over all cells in each area bin and log results.
+
+    Args:
+        max_cells: If set, stop after processing this many cells in total.
+            Useful for a quick smoke-test before a full run.
     """
 
     setup_mlflow()
 
     df = get_data()
     hulls_df = pd.read_csv(config.HULLS_PATH)
+    cell_details = get_cell_details().set_index("unique_cell")
+
     model_records: list[dict[str, object]] = []
+    total_cells_run = 0
 
     for area_bin, cells in iter_cells_by_area_bin(
         hulls_df=hulls_df,
@@ -302,14 +337,30 @@ def main():
         )
 
         for _, cell_row in cells.iterrows():
+            if max_cells is not None and total_cells_run >= max_cells:
+                log.info("Reached max_cells=%d, stopping.", max_cells)
+                break
+
             cell_id = cell_row['unique_cell']
             log.info("Running models for cell %s (bin %s)", cell_id, area_bin)
 
-            best_models = build_and_evaluate_models(cell_id, df, MODEL_SPECS)
+            cell_details_row = (
+                cell_details.loc[cell_id]
+                if cell_id in cell_details.index
+                else None
+            )
+
+            best_models = build_and_evaluate_models(
+                cell_id, df, MODEL_SPECS, cell_details_row=cell_details_row
+            )
             log_runs_for_cell(area_bin, cell_row, best_models)
             model_records.extend(
                 _build_model_rows(area_bin, cell_row, best_models)
             )
+            total_cells_run += 1
+
+        if max_cells is not None and total_cells_run >= max_cells:
+            break
 
     if model_records:
         geo_df = gpd.GeoDataFrame(model_records, geometry="geometry", crs=4326)
@@ -326,4 +377,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    _max = int(sys.argv[1]) if len(sys.argv) > 1 else None
+    main(max_cells=_max)
