@@ -15,7 +15,7 @@ def generate_isolation_forest_boundary_geom(
     df: pd.DataFrame,
     *,
     resolution: int = 400,
-    margin_factor: float = 1.0,
+    margin_factor: float = 0.1,
     level: float = 0.0,
     random_state: int = 42,
     verbose: bool = False,

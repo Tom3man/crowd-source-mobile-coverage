@@ -88,7 +88,8 @@ MODEL_SPECS: list[ModelSpec] = [
 
 def setup_mlflow(experiment_name: str = "cell_hull_bin_eval") -> None:
     """
-    Ensure MLflow logs locally under ./mlruns and point to the desired experiment.
+    Ensure MLflow logs locally under ./mlruns and point to the desired
+    experiment.
     """
     tracking_dir = Path(__file__).resolve().parents[2] / "mlruns"
     tracking_dir.mkdir(exist_ok=True)
@@ -159,7 +160,11 @@ def build_and_evaluate_models(
     if cell_details_row is not None:
         sector_geom = generate_sector_polygon_from_row(cell_details_row)
         if sector_geom is None:
-            log.warning("sector polygon could not be built for cell %s — falling back to alpha shape", cell_id)
+            log.warning(
+                "sector polygon could not be built for cell %s"
+                " — falling back to alpha shape",
+                cell_id,
+            )
 
     eval_kwargs = dict(
         work_crs=27700,
@@ -171,7 +176,9 @@ def build_and_evaluate_models(
 
     best_models = {}
 
-    # --- sector polygon as baseline (evaluated against itself as ground truth) ---
+    # --- sector polygon baseline ---
+    # Area metrics = 1.0 by construction (sector IS the ground truth).
+    # Point metrics are evaluated against test-month observations.
     if sector_geom is not None:
         sector_metrics = spatial_point_metrics(
             sector_geom, df_test, cell_id, **eval_kwargs
