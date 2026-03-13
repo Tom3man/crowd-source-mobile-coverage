@@ -109,76 +109,51 @@ def spatial_point_metrics(
     poly_pred_wgs84,
     df_test: pd.DataFrame,
     cell_id: str,
-    work_crs: int | str = 27700,
-    truth_shape: str = "hull",
-    truth_buffer_m: float = 0.0,
     neg_ratio: float = 1.0,
     rng: int = 42,
-    truth_geom=None,
+    **_kwargs,  # absorb legacy kwargs (work_crs, truth_geom, etc.)
 ):
     """
-    Unified evaluator: returns point- and area-based metrics + hybrid.
-    - poly_pred_wgs84: shapely Polygon/MultiPolygon in EPSG:4326
-    - df_test: your filtered test window (inside AOI), ALL cells for that month
-    - cell_id: the cell we're evaluating
-    - truth_geom: optional pre-built ground-truth polygon in EPSG:4326; when
-      provided, truth_shape and truth_buffer_m are ignored for area metrics
+    Point-only evaluator: of the held-out test observations, how many fall
+    inside the predicted polygon vs outside?
+
+    Positives  = test pings from cell_id (should be inside the polygon).
+    Negatives  = equal-sized sample of pings from other cells in the same
+                 test batch (should be outside the polygon).
+
+    Returns point_precision, point_recall, point_f1.
     """
-    # ---------- AREA METRICS ----------
-    if truth_geom is not None:
-        truth_poly_gs = gpd.GeoSeries([truth_geom], crs=4326).to_crs(work_crs)
-    else:
-        df_true_pts = df_test[(df_test["unique_cell"] == cell_id)]
-        truth_poly_gs = _truth_polygon_from_points(
-            df_true_pts, work_crs=work_crs,
-            method=truth_shape, buffer_m=truth_buffer_m
-        )
-    area_metrics = _area_overlap_metrics(
-        poly_pred_wgs84, truth_poly_gs, work_crs=work_crs)
-
-    # ---------- POINT METRICS (balanced) ----------
     if df_test.empty:
-        point_metrics = dict(
-            point_precision=0.0, point_recall=0.0, point_f1=0.0)
+        return dict(point_precision=0.0, point_recall=0.0, point_f1=0.0)
+
+    pos = df_test[df_test["unique_cell"] == cell_id]
+    neg = df_test[df_test["unique_cell"] != cell_id]
+
+    if pos.empty:
+        return dict(point_precision=0.0, point_recall=0.0, point_f1=0.0)
+
+    n_pos = len(pos)
+    n_neg = min(len(neg), int(np.ceil(neg_ratio * n_pos)))
+    neg_sample = (
+        resample(neg, replace=False, n_samples=n_neg, random_state=rng)
+        if n_neg > 0 else neg.iloc[0:0]
+    )
+
+    eval_df = pd.concat([pos, neg_sample], ignore_index=True)
+    y_true = (eval_df["unique_cell"] == cell_id).to_numpy()
+
+    if (poly_pred_wgs84 is None) or getattr(poly_pred_wgs84, "is_empty", True):
+        y_pred = np.zeros(len(eval_df), dtype=bool)
     else:
-        pos = df_test[df_test["unique_cell"] == cell_id]
-        neg = df_test[df_test["unique_cell"] != cell_id]
+        P = prep(poly_pred_wgs84)
+        y_pred = np.array(
+            [P.contains(Point(x, y))
+             for x, y in zip(eval_df["longitude"], eval_df["latitude"])],
+            dtype=bool,
+        )
 
-        if pos.empty:
-            point_metrics = dict(
-                point_precision=0.0, point_recall=0.0, point_f1=0.0)
-        else:
-            n_pos = len(pos)
-            n_neg = min(len(neg), int(np.ceil(neg_ratio * n_pos)))
-            neg_sample = resample(
-                neg, replace=False, n_samples=n_neg, random_state=rng
-            ) if n_neg > 0 else neg.iloc[0:0]
-
-            eval_df = pd.concat([pos, neg_sample], ignore_index=True)
-
-            # labels by membership
-            y_true = (eval_df["unique_cell"] == cell_id).to_numpy()
-
-            # predictions: polygon contains?
-            if (poly_pred_wgs84 is None) or getattr(poly_pred_wgs84, "is_empty", True):
-                y_pred = np.zeros(len(eval_df), dtype=bool)
-            else:
-                P = prep(poly_pred_wgs84)
-                y_pred = np.array(
-                    [P.contains(Point(x, y))
-                     for x, y in zip(
-                         eval_df["longitude"],
-                         eval_df["latitude"])],
-                    dtype=bool)
-
-            pp = precision_score(y_true, y_pred, zero_division=0)
-            pr = recall_score(y_true, y_pred, zero_division=0)
-            pf1 = f1_score(y_true, y_pred, zero_division=0)
-            point_metrics = dict(
-                point_precision=pp, point_recall=pr, point_f1=pf1)
-
-    # ---------- HYBRID ----------
-    hybrid = 0.5 * (point_metrics["point_f1"] + area_metrics["area_f1"])
-
-    out = dict(**point_metrics, **area_metrics, hybrid_f1=hybrid)
-    return out
+    return dict(
+        point_precision=precision_score(y_true, y_pred, zero_division=0),
+        point_recall=recall_score(y_true, y_pred, zero_division=0),
+        point_f1=f1_score(y_true, y_pred, zero_division=0),
+    )

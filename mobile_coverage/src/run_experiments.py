@@ -1,18 +1,17 @@
-"""Train candidate boundary models per cell and log the best configs/results.
+"""Train candidate boundary models per cell and write results to CSV.
 
-Loads pre-built convex hull bins, filters cells by point-count window, trains
-multiple boundary estimators on historical months, evaluates against the most
-recent month, logs metrics to MLflow, and writes winning geometries to
-`data/model_results_geoms.csv`.
+Loads pre-built convex hull bins, trains multiple boundary estimators on
+historical months, evaluates against the most recent month, and writes
+results to `data/model_results_geoms.csv`.  Resumes automatically from
+any previously completed cells if the output file already exists.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path  # used for out_path in main()
 from typing import Callable, Sequence
 
 import geopandas as gpd
-import mlflow
 import pandas as pd
 from shapely.geometry.base import BaseGeometry
 
@@ -86,17 +85,6 @@ MODEL_SPECS: list[ModelSpec] = [
 ]
 
 
-def setup_mlflow(experiment_name: str = "cell_hull_bin_eval") -> None:
-    """
-    Ensure MLflow logs locally under ./mlruns and point to the desired
-    experiment.
-    """
-    tracking_dir = Path(__file__).resolve().parents[2] / "mlruns"
-    tracking_dir.mkdir(exist_ok=True)
-    mlflow.set_tracking_uri(f"file://{tracking_dir}")
-    mlflow.set_experiment(experiment_name)
-
-
 def iter_cells_by_area_bin(hulls_df: pd.DataFrame, tolerance: float):
     """
     Yield (area_bin, df_subset) pairs filtered around the median n_points.
@@ -166,19 +154,11 @@ def build_and_evaluate_models(
                 cell_id,
             )
 
-    eval_kwargs = dict(
-        work_crs=27700,
-        neg_ratio=1.0,
-        truth_geom=sector_geom,          # None → falls back to alpha shape
-        truth_shape="alpha",             # only used when truth_geom is None
-        truth_buffer_m=0.0,
-    )
+    eval_kwargs = dict(neg_ratio=1.0)
 
     best_models = {}
 
-    # --- sector polygon baseline ---
-    # Area metrics = 1.0 by construction (sector IS the ground truth).
-    # Point metrics are evaluated against test-month observations.
+    # --- sector polygon baseline (evaluated identically to data-driven methods) ---
     if sector_geom is not None:
         sector_metrics = spatial_point_metrics(
             sector_geom, df_test, cell_id, **eval_kwargs
@@ -188,14 +168,14 @@ def build_and_evaluate_models(
             "metrics": sector_metrics,
             "params": {"radius_col": "radii_90"},
         }
-        log.info("sector hybrid_f1 %.4f", sector_metrics["hybrid_f1"])
+        log.info("sector point_f1 %.4f", sector_metrics["point_f1"])
 
     # --- data-driven methods ---
     for name, generator, param_grid in model_specs:
         log.info("Evaluating %s with %d parameter sets", name, len(param_grid))
 
         best_geom = None
-        best_metrics = {"hybrid_f1": -1.0}
+        best_metrics = {"point_f1": -1.0}
         best_params = None
 
         for params in param_grid:
@@ -211,11 +191,11 @@ def build_and_evaluate_models(
             )
             log.debug("%s metrics for %s: %s", name, params, metrics)
 
-            if metrics["hybrid_f1"] > best_metrics["hybrid_f1"]:
+            if metrics["point_f1"] > best_metrics["point_f1"]:
                 log.info(
-                    "%s achieved new best hybrid_f1 %.4f with params %s",
+                    "%s achieved new best point_f1 %.4f with params %s",
                     name,
-                    metrics["hybrid_f1"],
+                    metrics["point_f1"],
                     params,
                 )
                 best_geom = geom
@@ -226,9 +206,9 @@ def build_and_evaluate_models(
             log.error("%s produced no viable geometry", name)
         else:
             log.info(
-                "%s best hybrid_f1 %.4f with params %s",
+                "%s best point_f1 %.4f with params %s",
                 name,
-                best_metrics["hybrid_f1"],
+                best_metrics["point_f1"],
                 best_params,
             )
 
@@ -239,50 +219,6 @@ def build_and_evaluate_models(
         }
 
     return best_models
-
-
-def log_runs_for_cell(
-    area_bin: int,
-    cell_row: pd.Series,
-    model_results: dict[str, dict[str, object]],
-) -> None:
-    """
-    Log one MLflow run per cell/model pair containing shared + model params.
-    """
-    if not model_results:
-        log.warning(
-            "Skipping MLflow logging for cell %s because no models ran",
-            cell_row['unique_cell'],
-        )
-        return
-
-    base_params = {
-        "cell_id": cell_row['unique_cell'],
-        "area_bin": int(area_bin),
-        "n_points": int(cell_row['n_points']),
-        "area": float(cell_row['area']),
-    }
-
-    for model_name, info in model_results.items():
-        metrics = sanitise_numpy_scalars(info.get("metrics") or {})
-        params = info.get("params") or {}
-
-        if not metrics:
-            log.info(
-                "No metrics to log for %s on cell %s",
-                model_name,
-                cell_row['unique_cell'],
-            )
-            continue
-
-        all_params = sanitise_numpy_scalars(
-            {"model_name": model_name, **base_params, **params}
-        )
-        run_name = f"{cell_row['unique_cell']}_{model_name}"
-
-        with mlflow.start_run(run_name=run_name):
-            mlflow.log_params(all_params)
-            mlflow.log_metrics(metrics)
 
 
 def _build_model_rows(
@@ -319,25 +255,38 @@ def _build_model_rows(
 
 def main(max_cells: int | None = None):
     """
-    Run experiments over all cells in each area bin and log results.
+    Run experiments over all cells in each area bin and write results to CSV.
+
+    Resumes automatically: any cell_id already present in the output file is
+    skipped.  Results are appended incrementally so a crashed run loses at
+    most one cell's work.
 
     Args:
         max_cells: If set, stop after processing this many cells in total.
             Useful for a quick smoke-test before a full run.
     """
+    out_path = Path(config.MODEL_RESULTS_PATH)
 
-    setup_mlflow()
+    # load already-completed cell ids for resume
+    completed: set[str] = set()
+    if out_path.exists():
+        try:
+            existing = pd.read_csv(out_path, usecols=["cell_id"])
+            completed = set(existing["cell_id"].unique())
+            log.info("Resuming — %d cells already completed", len(completed))
+        except Exception:
+            pass
 
     df = get_data()
     hulls_df = pd.read_csv(config.HULLS_PATH)
     cell_details = get_cell_details().set_index("unique_cell")
 
-    model_records: list[dict[str, object]] = []
+    write_header = not out_path.exists() or out_path.stat().st_size == 0
     total_cells_run = 0
 
     for area_bin, cells in iter_cells_by_area_bin(
         hulls_df=hulls_df,
-        tolerance=config.POINT_TOLERANCE,
+        tolerance=1.0,  # include all cells; no n_points filtering
     ):
         log.info(
             "Processing bin %s with %d candidate cells", area_bin, len(cells)
@@ -349,6 +298,11 @@ def main(max_cells: int | None = None):
                 break
 
             cell_id = cell_row['unique_cell']
+
+            if cell_id in completed:
+                log.debug("Skipping already-completed cell %s", cell_id)
+                continue
+
             log.info("Running models for cell %s (bin %s)", cell_id, area_bin)
 
             cell_details_row = (
@@ -360,27 +314,25 @@ def main(max_cells: int | None = None):
             best_models = build_and_evaluate_models(
                 cell_id, df, MODEL_SPECS, cell_details_row=cell_details_row
             )
-            log_runs_for_cell(area_bin, cell_row, best_models)
-            model_records.extend(
-                _build_model_rows(area_bin, cell_row, best_models)
-            )
+
+            rows = _build_model_rows(area_bin, cell_row, best_models)
+            if rows:
+                geo_df = gpd.GeoDataFrame(rows, geometry="geometry", crs=4326)
+                geo_df.to_csv(
+                    out_path,
+                    mode="a",
+                    header=write_header,
+                    index=False,
+                )
+                write_header = False
+
+            completed.add(cell_id)
             total_cells_run += 1
 
         if max_cells is not None and total_cells_run >= max_cells:
             break
 
-    if model_records:
-        geo_df = gpd.GeoDataFrame(model_records, geometry="geometry", crs=4326)
-        geo_df.to_csv(config.MODEL_RESULTS_PATH, index=False)
-        log.info(
-            "Saved %d model geometry rows to %s",
-            len(geo_df),
-            config.MODEL_RESULTS_PATH,
-        )
-    else:
-        log.warning(
-            "No model geometries were produced; GeoDataFrame not created."
-        )
+    log.info("Done. %d cells processed this run.", total_cells_run)
 
 
 if __name__ == "__main__":
