@@ -30,7 +30,10 @@ RUN poetry install --only main --no-interaction --no-ansi
 # Results are written here — mount a host directory to persist output
 RUN mkdir -p data
 
-# Pass your HuggingFace token via: docker run -e HF_TOKEN=hf_...
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+
+# Pass your HuggingFace token via .env or -e HF_TOKEN=hf_...
 ENV HF_TOKEN=""
 
-CMD ["python", "-m", "mobile_coverage.src.run_experiments"]
+CMD ["./entrypoint.sh"]
