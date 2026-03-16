@@ -1,0 +1,9 @@
+data/
+mlruns/
+playarea/
+notebooks/
+run.log
+*.pyc
+__pycache__/
+.git/
+.venv/
